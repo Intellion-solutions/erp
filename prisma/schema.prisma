@@ -14,6 +14,8 @@ enum Role {
   OWNER
   MANAGER
   SALESPERSON
+  ACCOUNTANT
+  WAREHOUSE_MANAGER
 }
 
 enum UserStatus {
@@ -28,6 +30,8 @@ enum TransactionType {
   RETURN
   ADJUSTMENT
   TRANSFER
+  DAMAGE
+  EXPIRY
 }
 
 enum PaymentMethod {
@@ -37,6 +41,7 @@ enum PaymentMethod {
   MOBILE_MONEY
   CHEQUE
   CREDIT
+  CRYPTO
 }
 
 enum PaymentStatus {
@@ -45,12 +50,14 @@ enum PaymentStatus {
   FAILED
   CANCELLED
   REFUNDED
+  PARTIAL
 }
 
 enum ProductStatus {
   ACTIVE
   INACTIVE
   DISCONTINUED
+  OUT_OF_STOCK
 }
 
 enum OrderStatus {
@@ -60,6 +67,35 @@ enum OrderStatus {
   SHIPPED
   DELIVERED
   CANCELLED
+  RETURNED
+}
+
+enum CustomerType {
+  RETAIL
+  WHOLESALE
+  VIP
+  CORPORATE
+}
+
+enum NotificationType {
+  EMAIL
+  SMS
+  PUSH
+  IN_APP
+}
+
+enum NotificationPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum LocationType {
+  STORE
+  WAREHOUSE
+  OFFICE
+  DISTRIBUTION_CENTER
 }
 
 model User {
@@ -73,15 +109,52 @@ model User {
   status      UserStatus @default(ACTIVE)
   password    String
   lastLogin   DateTime?
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  locationId  String?
+  avatar      String?
+  preferences Json?
+  twoFactorEnabled Boolean @default(false)
+  twoFactorSecret String?
   
   // Relations
+  location    Location?  @relation(fields: [locationId], references: [id])
   sales       Sale[]
   purchases   Purchase[]
   auditLogs   AuditLog[]
+  notifications Notification[]
+  tasks       Task[]
+  expenses    Expense[]
+  
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
   
   @@map("users")
+}
+
+model Location {
+  id          String       @id @default(cuid())
+  name        String
+  type        LocationType @default(STORE)
+  address     String?
+  city        String?
+  state       String?
+  country     String?
+  postalCode  String?
+  phone       String?
+  email       String?
+  managerId   String?
+  isActive    Boolean      @default(true)
+  
+  // Relations
+  users       User[]
+  products    Product[]
+  sales       Sale[]
+  purchases   Purchase[]
+  inventory   Inventory[]
+  
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  
+  @@map("locations")
 }
 
 model Category {
@@ -114,20 +187,62 @@ model Product {
   status        ProductStatus @default(ACTIVE)
   categoryId    String
   supplierId    String?
+  locationId    String?
   taxRate       Decimal       @default(0) @db.Decimal(5, 2)
   image         String?
+  weight        Decimal?      @db.Decimal(8, 3)
+  dimensions    String?
+  expiryDate    DateTime?
+  reorderPoint  Int?
+  isSerialized  Boolean       @default(false)
+  isPerishable  Boolean       @default(false)
+  tags          String[]
   
   // Relations
   category      Category      @relation(fields: [categoryId], references: [id])
   supplier      Supplier?     @relation(fields: [supplierId], references: [id])
+  location      Location?     @relation(fields: [locationId], references: [id])
   saleItems     SaleItem[]
   purchaseItems PurchaseItem[]
   stockMovements StockMovement[]
+  inventory     Inventory[]
+  serialNumbers ProductSerial[]
   
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
   
   @@map("products")
+}
+
+model ProductSerial {
+  id          String   @id @default(cuid())
+  productId   String
+  serialNumber String  @unique
+  isActive    Boolean  @default(true)
+  
+  // Relations
+  product     Product  @relation(fields: [productId], references: [id])
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@map("product_serials")
+}
+
+model Inventory {
+  id          String   @id @default(cuid())
+  productId   String
+  locationId  String
+  quantity    Int
+  reserved    Int      @default(0)
+  available   Int      @default(0)
+  
+  // Relations
+  product     Product  @relation(fields: [productId], references: [id])
+  location    Location @relation(fields: [locationId], references: [id])
+  
+  @@unique([productId, locationId])
+  @@map("inventory")
 }
 
 model Supplier {
@@ -138,6 +253,10 @@ model Supplier {
   address     String?
   contactPerson String?
   taxId       String?
+  creditLimit Decimal?  @db.Decimal(10, 2)
+  paymentTerms String?
+  rating      Int?
+  isActive    Boolean   @default(true)
   
   // Relations
   products    Product[]
@@ -150,19 +269,31 @@ model Supplier {
 }
 
 model Customer {
-  id          String    @id @default(cuid())
+  id          String       @id @default(cuid())
   name        String
   email       String?
   phone       String?
   address     String?
+  city        String?
+  state       String?
+  country     String?
+  postalCode  String?
   taxId       String?
-  creditLimit Decimal?  @db.Decimal(10, 2)
+  creditLimit Decimal?     @db.Decimal(10, 2)
+  type        CustomerType @default(RETAIL)
+  loyaltyPoints Int        @default(0)
+  totalSpent  Decimal      @default(0) @db.Decimal(12, 2)
+  lastPurchase DateTime?
+  isActive    Boolean      @default(true)
+  notes       String?
   
   // Relations
   sales       Sale[]
+  returns     Return[]
+  loyaltyTransactions LoyaltyTransaction[]
   
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
   
   @@map("customers")
 }
@@ -172,6 +303,7 @@ model Sale {
   saleNumber    String        @unique
   customerId    String?
   userId        String
+  locationId    String?
   subtotal      Decimal       @db.Decimal(10, 2)
   taxAmount     Decimal       @db.Decimal(10, 2)
   discountAmount Decimal      @default(0) @db.Decimal(10, 2)
@@ -180,10 +312,13 @@ model Sale {
   paymentStatus PaymentStatus @default(PENDING)
   notes         String?
   terminalId    String?
+  isRefunded    Boolean       @default(false)
+  refundReason  String?
   
   // Relations
   customer      Customer?     @relation(fields: [customerId], references: [id])
   user          User          @relation(fields: [userId], references: [id])
+  location      Location?     @relation(fields: [locationId], references: [id])
   items         SaleItem[]
   payments      Payment[]
   
@@ -210,11 +345,32 @@ model SaleItem {
   @@map("sale_items")
 }
 
+model Return {
+  id          String   @id @default(cuid())
+  returnNumber String  @unique
+  saleId      String?
+  customerId  String
+  userId      String
+  reason      String
+  total       Decimal  @db.Decimal(10, 2)
+  status      PaymentStatus @default(PENDING)
+  
+  // Relations
+  customer    Customer @relation(fields: [customerId], references: [id])
+  user        User     @relation(fields: [userId], references: [id])
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@map("returns")
+}
+
 model Purchase {
   id            String         @id @default(cuid())
   purchaseNumber String        @unique
   supplierId    String
   userId        String
+  locationId    String?
   subtotal      Decimal        @db.Decimal(10, 2)
   taxAmount     Decimal        @db.Decimal(10, 2)
   total         Decimal        @db.Decimal(10, 2)
@@ -226,6 +382,7 @@ model Purchase {
   // Relations
   supplier      Supplier       @relation(fields: [supplierId], references: [id])
   user          User           @relation(fields: [userId], references: [id])
+  location      Location?      @relation(fields: [locationId], references: [id])
   items         PurchaseItem[]
   payments      Payment[]
   
@@ -260,6 +417,7 @@ model Payment {
   notes         String?
   saleId        String?
   purchaseId    String?
+  transactionId String?
   
   // Relations
   sale          Sale?         @relation(fields: [saleId], references: [id])
@@ -278,6 +436,7 @@ model StockMovement {
   quantity    Int
   reference   String?
   notes       String?
+  locationId  String?
   
   // Relations
   product     Product         @relation(fields: [productId], references: [id])
@@ -316,4 +475,88 @@ model Setting {
   updatedAt   DateTime @updatedAt
   
   @@map("settings")
+}
+
+model Notification {
+  id          String             @id @default(cuid())
+  userId      String
+  type        NotificationType
+  title       String
+  message     String
+  priority    NotificationPriority @default(MEDIUM)
+  isRead      Boolean            @default(false)
+  data        Json?
+  
+  // Relations
+  user        User               @relation(fields: [userId], references: [id])
+  
+  createdAt   DateTime           @default(now())
+  
+  @@map("notifications")
+}
+
+model Task {
+  id          String   @id @default(cuid())
+  userId      String
+  title       String
+  description String?
+  status      String   @default("PENDING")
+  priority    String   @default("MEDIUM")
+  dueDate     DateTime?
+  completedAt DateTime?
+  
+  // Relations
+  user        User     @relation(fields: [userId], references: [id])
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@map("tasks")
+}
+
+model Expense {
+  id          String   @id @default(cuid())
+  userId      String
+  category    String
+  amount      Decimal  @db.Decimal(10, 2)
+  description String
+  date        DateTime
+  receipt     String?
+  
+  // Relations
+  user        User     @relation(fields: [userId], references: [id])
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@map("expenses")
+}
+
+model LoyaltyTransaction {
+  id          String   @id @default(cuid())
+  customerId  String
+  points      Int
+  type        String   // EARN, REDEEM, EXPIRE
+  description String?
+  
+  // Relations
+  customer    Customer @relation(fields: [customerId], references: [id])
+  
+  createdAt   DateTime @default(now())
+  
+  @@map("loyalty_transactions")
+}
+
+model FileUpload {
+  id          String   @id @default(cuid())
+  filename    String
+  originalName String
+  mimeType    String
+  size        Int
+  path        String
+  uploadedBy  String?
+  
+  createdAt   DateTime @default(now())
+  
+  @@map("file_uploads")
 }
