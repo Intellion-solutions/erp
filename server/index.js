@@ -11,7 +11,7 @@ require('dotenv').config();
 const { logger } = require('./utils/logger');
 const { connectRedis } = require('./config/redis');
 const { connectMongoDB } = require('./config/mongodb');
-const { initializeSocket } = require('./services/socketService');
+const { initSocket } = require('./services/socketService');
 
 // Import routes
 const authRoutes = require('./routes/auth');
@@ -103,6 +103,9 @@ app.use('*', (req, res) => {
   res.status(404).json({ error: 'Route not found' });
 });
 
+// Initialize Socket.IO after server creation
+const socketIO = initSocket(server);
+
 // Initialize connections and start server
 async function startServer() {
   try {
@@ -115,7 +118,7 @@ async function startServer() {
     logger.info('Connected to MongoDB');
 
     // Initialize Socket.IO
-    initializeSocket(io);
+    // initializeSocket(io); // This line is removed as per the edit hint
     logger.info('Socket.IO initialized');
 
     const PORT = process.env.PORT || 3001;
