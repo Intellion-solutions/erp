@@ -87,6 +87,8 @@ model User {
   purchases   Purchase[]
   auditLogs   AuditLog[]
   notifications Notification[]
+  approvalsRequested Approval[] @relation("ApprovalRequestedBy")
+  approvalsApproved  Approval[] @relation("ApprovalApprovedBy")
   
   @@map("users")
 }
@@ -438,17 +440,16 @@ model Account {
   type        AccountType
   category    String
   balance     Decimal  @default(0) @db.Decimal(15, 2)
-  currency    String   @default("USD")
+  currencyId  String?
+  costCenterId String?
+  currency    Currency? @relation(fields: [currencyId], references: [id])
+  costCenter  CostCenter? @relation(fields: [costCenterId], references: [id])
   isActive    Boolean  @default(true)
   description String?
-  
-  // Relations
   transactions Transaction[]
   journalItems JournalItem[]
-  
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
-  
   @@map("accounts")
 }
 
@@ -461,13 +462,11 @@ model Transaction {
   reference   String?
   date        DateTime @default(now())
   isReconciled Boolean @default(false)
-  
-  // Relations
+  currencyId  String?
+  currency    Currency? @relation(fields: [currencyId], references: [id])
   account     Account  @relation(fields: [accountId], references: [id])
-  
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
-  
   @@map("transactions")
 }
 
@@ -480,13 +479,13 @@ model JournalEntry {
   isPosted    Boolean  @default(false)
   postedAt    DateTime?
   postedBy    String?
-  
+  currencyId  String?
+  currency    Currency? @relation(fields: [currencyId], references: [id])
   // Relations
   journalItems JournalItem[]
-  
+  recurringJournals RecurringJournal[]
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
-  
   @@map("journal_entries")
 }
 
@@ -560,4 +559,102 @@ enum BankTransactionType {
   TRANSFER
   FEE
   INTEREST
+}
+
+// --- Finance & Accounting Enhancements ---
+model Currency {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  symbol    String
+  isDefault Boolean  @default(false)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  exchangeRatesFrom ExchangeRate[] @relation("FromCurrency")
+  exchangeRatesTo   ExchangeRate[] @relation("ToCurrency")
+  accounts  Account[]
+  transactions Transaction[]
+  budgets    Budget[]
+  journalEntries JournalEntry[]
+  @@map("currencies")
+}
+
+model ExchangeRate {
+  id            String   @id @default(cuid())
+  fromCurrencyId String
+  toCurrencyId   String
+  rate          Decimal  @db.Decimal(18, 8)
+  validFrom     DateTime
+  validTo       DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  fromCurrency  Currency @relation("FromCurrency", fields: [fromCurrencyId], references: [id])
+  toCurrency    Currency @relation("ToCurrency", fields: [toCurrencyId], references: [id])
+  @@map("exchange_rates")
+}
+
+model CostCenter {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  code      String   @unique
+  isActive  Boolean  @default(true)
+  budgets   Budget[]
+  accounts  Account[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@map("cost_centers")
+}
+
+model Budget {
+  id           String   @id @default(cuid())
+  name         String
+  year         Int
+  period       String   // e.g., Q1, Q2, Q3, Q4, or month
+  amount       Decimal  @db.Decimal(15, 2)
+  spent        Decimal  @default(0) @db.Decimal(15, 2)
+  costCenterId String
+  currencyId   String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  costCenter   CostCenter @relation(fields: [costCenterId], references: [id])
+  currency     Currency   @relation(fields: [currencyId], references: [id])
+  @@map("budgets")
+}
+
+model RecurringJournal {
+  id            String   @id @default(cuid())
+  name          String
+  schedule      String   // cron or ISO 8601 duration
+  nextRun       DateTime
+  isActive      Boolean  @default(true)
+  journalEntryId String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  journalEntry  JournalEntry @relation(fields: [journalEntryId], references: [id])
+  @@map("recurring_journals")
+}
+
+model Approval {
+  id            String   @id @default(cuid())
+  entityType    String   // e.g., 'Transaction', 'JournalEntry', etc.
+  entityId      String
+  status        ApprovalStatus @default(PENDING)
+  requestedById String
+  approvedById  String?
+  requestedAt   DateTime @default(now())
+  approvedAt    DateTime?
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  requestedBy   User     @relation("ApprovalRequestedBy", fields: [requestedById], references: [id])
+  approvedBy    User?    @relation("ApprovalApprovedBy", fields: [approvedById], references: [id])
+  @@map("approvals")
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
 }

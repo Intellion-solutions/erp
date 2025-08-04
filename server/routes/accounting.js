@@ -997,4 +997,233 @@ router.get('/reports/cash-flow', async (req, res) => {
   }
 });
 
+// ==================== CURRENCIES ====================
+const { io } = require('../services/socketService');
+
+// Get all currencies
+router.get('/currencies', async (req, res) => {
+  try {
+    const currencies = await prisma.currency.findMany({ orderBy: { code: 'asc' } });
+    res.json(currencies);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch currencies' });
+  }
+});
+
+// Create currency
+router.post('/currencies', [
+  body('code').notEmpty(),
+  body('name').notEmpty(),
+  body('symbol').notEmpty()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    const { code, name, symbol, isDefault } = req.body;
+    const currency = await prisma.currency.create({ data: { code, name, symbol, isDefault: !!isDefault } });
+    await createAuditLog({ userId: req.user.id, action: 'CREATE', entity: 'Currency', entityId: currency.id, newValues: currency });
+    res.status(201).json(currency);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to create currency' });
+  }
+});
+
+// Update currency
+router.put('/currencies/:id', [
+  body('name').optional(),
+  body('symbol').optional(),
+  body('isDefault').optional()
+], async (req, res) => {
+  try {
+    const { id } = req.params;
+    const data = req.body;
+    const currency = await prisma.currency.update({ where: { id }, data });
+    await createAuditLog({ userId: req.user.id, action: 'UPDATE', entity: 'Currency', entityId: id, newValues: currency });
+    res.json(currency);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to update currency' });
+  }
+});
+
+// Delete currency
+router.delete('/currencies/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await prisma.currency.delete({ where: { id } });
+    await createAuditLog({ userId: req.user.id, action: 'DELETE', entity: 'Currency', entityId: id });
+    res.json({ message: 'Currency deleted' });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to delete currency' });
+  }
+});
+
+// ==================== EXCHANGE RATES ====================
+
+// Get all exchange rates
+router.get('/exchange-rates', async (req, res) => {
+  try {
+    const rates = await prisma.exchangeRate.findMany({
+      include: { fromCurrency: true, toCurrency: true },
+      orderBy: { validFrom: 'desc' }
+    });
+    res.json(rates);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch exchange rates' });
+  }
+});
+
+// Create exchange rate
+router.post('/exchange-rates', [
+  body('fromCurrencyId').notEmpty(),
+  body('toCurrencyId').notEmpty(),
+  body('rate').isFloat({ min: 0 }),
+  body('validFrom').notEmpty()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    const { fromCurrencyId, toCurrencyId, rate, validFrom, validTo } = req.body;
+    const exchangeRate = await prisma.exchangeRate.create({ data: { fromCurrencyId, toCurrencyId, rate, validFrom: new Date(validFrom), validTo: validTo ? new Date(validTo) : null } });
+    await createAuditLog({ userId: req.user.id, action: 'CREATE', entity: 'ExchangeRate', entityId: exchangeRate.id, newValues: exchangeRate });
+    res.status(201).json(exchangeRate);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to create exchange rate' });
+  }
+});
+
+// ==================== COST CENTERS ====================
+
+// Get all cost centers
+router.get('/cost-centers', async (req, res) => {
+  try {
+    const costCenters = await prisma.costCenter.findMany({ orderBy: { code: 'asc' } });
+    res.json(costCenters);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch cost centers' });
+  }
+});
+
+// Create cost center
+router.post('/cost-centers', [
+  body('name').notEmpty(),
+  body('code').notEmpty()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    const { name, code } = req.body;
+    const costCenter = await prisma.costCenter.create({ data: { name, code } });
+    await createAuditLog({ userId: req.user.id, action: 'CREATE', entity: 'CostCenter', entityId: costCenter.id, newValues: costCenter });
+    res.status(201).json(costCenter);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to create cost center' });
+  }
+});
+
+// ==================== BUDGETS ====================
+
+// Get all budgets
+router.get('/budgets', async (req, res) => {
+  try {
+    const budgets = await prisma.budget.findMany({ include: { costCenter: true, currency: true } });
+    res.json(budgets);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch budgets' });
+  }
+});
+
+// Create budget
+router.post('/budgets', [
+  body('name').notEmpty(),
+  body('year').isInt(),
+  body('period').notEmpty(),
+  body('amount').isFloat({ min: 0 }),
+  body('costCenterId').notEmpty(),
+  body('currencyId').notEmpty()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    const { name, year, period, amount, costCenterId, currencyId } = req.body;
+    const budget = await prisma.budget.create({ data: { name, year, period, amount, costCenterId, currencyId } });
+    await createAuditLog({ userId: req.user.id, action: 'CREATE', entity: 'Budget', entityId: budget.id, newValues: budget });
+    res.status(201).json(budget);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to create budget' });
+  }
+});
+
+// ==================== RECURRING JOURNALS ====================
+
+// Get all recurring journals
+router.get('/recurring-journals', async (req, res) => {
+  try {
+    const journals = await prisma.recurringJournal.findMany({ include: { journalEntry: true } });
+    res.json(journals);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch recurring journals' });
+  }
+});
+
+// Create recurring journal
+router.post('/recurring-journals', [
+  body('name').notEmpty(),
+  body('schedule').notEmpty(),
+  body('journalEntryId').notEmpty()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    const { name, schedule, nextRun, journalEntryId } = req.body;
+    const recurring = await prisma.recurringJournal.create({ data: { name, schedule, nextRun: new Date(nextRun), journalEntryId } });
+    await createAuditLog({ userId: req.user.id, action: 'CREATE', entity: 'RecurringJournal', entityId: recurring.id, newValues: recurring });
+    res.status(201).json(recurring);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to create recurring journal' });
+  }
+});
+
+// ==================== APPROVALS ====================
+
+// Get all approvals
+router.get('/approvals', async (req, res) => {
+  try {
+    const approvals = await prisma.approval.findMany({ include: { requestedBy: true, approvedBy: true } });
+    res.json(approvals);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch approvals' });
+  }
+});
+
+// Approve an entity
+router.post('/approvals/:id/approve', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const approval = await prisma.approval.update({ where: { id }, data: { status: 'APPROVED', approvedById: req.user.id, approvedAt: new Date() } });
+    await createAuditLog({ userId: req.user.id, action: 'APPROVE', entity: 'Approval', entityId: id, newValues: approval });
+    res.json(approval);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to approve' });
+  }
+});
+
+// Reject an entity
+router.post('/approvals/:id/reject', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const approval = await prisma.approval.update({ where: { id }, data: { status: 'REJECTED', approvedById: req.user.id, approvedAt: new Date() } });
+    await createAuditLog({ userId: req.user.id, action: 'REJECT', entity: 'Approval', entityId: id, newValues: approval });
+    res.json(approval);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to reject' });
+  }
+});
+
+// ==================== REAL-TIME DASHBOARD (STUB) ====================
+
+// Example: emit dashboard update (call this after relevant changes)
+function emitFinanceDashboardUpdate(data) {
+  if (io) io.emit('financeDashboardUpdated', data);
+}
+
 module.exports = router;
