@@ -1,389 +1,747 @@
+// Enhanced POS Hardware Service
 class POSHardware {
   constructor() {
-    this.usbDevice = null;
-    this.serialPort = null;
-    this.cashDrawer = null;
-    this.isConnected = false;
+    this.devices = {
+      usb: null,
+      serial: null,
+      barcodeScanner: null,
+      cashDrawer: null,
+      printer: null
+    };
+    
+    this.status = {
+      connected: false,
+      deviceType: null,
+      lastError: null,
+      isPrinting: false,
+      isScanning: false
+    };
+
+    this.config = {
+      autoConnect: true,
+      retryAttempts: 3,
+      timeout: 5000,
+      paperWidth: 80,
+      printQuality: 'normal',
+      cashDrawerEnabled: true,
+      barcodeScannerEnabled: true
+    };
+
+    this.supportedDevices = {
+      printers: [
+        { name: 'Epson TM-T88V', vendorId: 0x04b8, productId: 0x0202 },
+        { name: 'Citizen CT-S310II', vendorId: 0x0572, productId: 0x0001 },
+        { name: 'Star TSP100', vendorId: 0x0519, productId: 0x0003 },
+        { name: 'Generic Thermal Printer', vendorId: null, productId: null }
+      ],
+      barcodeScanners: [
+        { name: 'Generic Barcode Scanner', vendorId: null, productId: null }
+      ],
+      cashDrawers: [
+        { name: 'Generic Cash Drawer', vendorId: null, productId: null }
+      ]
+    };
+
+    this.eventListeners = new Map();
+    this.init();
   }
 
-  // ==================== WebUSB Integration ====================
-
-  async connectUSB() {
+  // Initialize the service
+  async init() {
     try {
-      // Request USB device
-      this.usbDevice = await navigator.usb.requestDevice({
-        filters: [
-          {
-            vendorId: 0x0483, // STMicroelectronics
-            productId: 0x5740  // Common POS printer
-          },
-          {
-            vendorId: 0x04b8, // Epson
-            productId: 0x0202  // TM-T88V
-          },
-          {
-            vendorId: 0x0416, // Citizen
-            productId: 0x0101  // CT-S310II
-          }
-        ]
-      });
+      // Check for WebUSB support
+      if ('usb' in navigator) {
+        console.log('WebUSB is supported');
+        this.setupUSBListeners();
+      }
 
-      await this.usbDevice.open();
-      await this.usbDevice.selectConfiguration(1);
-      await this.usbDevice.claimInterface(0);
+      // Check for Web Serial support
+      if ('serial' in navigator) {
+        console.log('Web Serial is supported');
+        this.setupSerialListeners();
+      }
 
-      this.isConnected = true;
-      console.log('USB device connected:', this.usbDevice.productName);
-      return this.usbDevice;
+      // Setup barcode scanner
+      this.setupBarcodeScanner();
+
+      // Auto-connect if enabled
+      if (this.config.autoConnect) {
+        await this.autoConnect();
+      }
+
+      this.updateStatus();
+    } catch (error) {
+      console.error('POS Hardware initialization failed:', error);
+      this.status.lastError = error.message;
+    }
+  }
+
+  // Setup USB event listeners
+  setupUSBListeners() {
+    navigator.usb.addEventListener('connect', (event) => {
+      console.log('USB device connected:', event.device);
+      this.handleDeviceConnect(event.device, 'usb');
+    });
+
+    navigator.usb.addEventListener('disconnect', (event) => {
+      console.log('USB device disconnected:', event.device);
+      this.handleDeviceDisconnect(event.device, 'usb');
+    });
+  }
+
+  // Setup Serial event listeners
+  setupSerialListeners() {
+    // Serial port events are handled differently
+    // We'll check for port changes periodically
+    setInterval(() => {
+      this.checkSerialPorts();
+    }, 5000);
+  }
+
+  // Handle device connection
+  async handleDeviceConnect(device, type) {
+    try {
+      console.log(`Device connected via ${type}:`, device);
+      
+      // Determine device type
+      const deviceType = await this.identifyDevice(device);
+      
+      if (deviceType) {
+        this.devices[deviceType] = device;
+        this.status.connected = true;
+        this.status.deviceType = type;
+        
+        // Emit connection event
+        this.emit('deviceConnected', { device, type, deviceType });
+        
+        console.log(`Device identified as ${deviceType} and connected`);
+      }
+    } catch (error) {
+      console.error('Error handling device connection:', error);
+      this.status.lastError = error.message;
+    }
+  }
+
+  // Handle device disconnection
+  handleDeviceDisconnect(device, type) {
+    console.log(`Device disconnected via ${type}:`, device);
+    
+    // Find and remove the disconnected device
+    Object.keys(this.devices).forEach(key => {
+      if (this.devices[key] === device) {
+        this.devices[key] = null;
+      }
+    });
+    
+    this.status.connected = Object.values(this.devices).some(device => device !== null);
+    this.status.deviceType = this.status.connected ? type : null;
+    
+    // Emit disconnection event
+    this.emit('deviceDisconnected', { device, type });
+  }
+
+  // Identify device type
+  async identifyDevice(device) {
+    try {
+      // Check if it's a printer
+      if (this.isPrinter(device)) {
+        return 'printer';
+      }
+      
+      // Check if it's a barcode scanner
+      if (this.isBarcodeScanner(device)) {
+        return 'barcodeScanner';
+      }
+      
+      // Check if it's a cash drawer
+      if (this.isCashDrawer(device)) {
+        return 'cashDrawer';
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('Error identifying device:', error);
+      return null;
+    }
+  }
+
+  // Check if device is a printer
+  isPrinter(device) {
+    const printerIds = this.supportedDevices.printers.map(p => ({
+      vendorId: p.vendorId,
+      productId: p.productId
+    }));
+    
+    return printerIds.some(printer => 
+      (!printer.vendorId || device.vendorId === printer.vendorId) &&
+      (!printer.productId || device.productId === printer.productId)
+    );
+  }
+
+  // Check if device is a barcode scanner
+  isBarcodeScanner(device) {
+    // Barcode scanners typically have specific characteristics
+    // This is a simplified check
+    return device.productName?.toLowerCase().includes('scanner') ||
+           device.productName?.toLowerCase().includes('barcode');
+  }
+
+  // Check if device is a cash drawer
+  isCashDrawer(device) {
+    // Cash drawers are typically connected via printer
+    return device.productName?.toLowerCase().includes('drawer') ||
+           device.productName?.toLowerCase().includes('cash');
+  }
+
+  // Auto-connect to available devices
+  async autoConnect() {
+    try {
+      console.log('Attempting auto-connect...');
+      
+      // Try USB devices first
+      if ('usb' in navigator) {
+        const devices = await navigator.usb.getDevices();
+        for (const device of devices) {
+          await this.handleDeviceConnect(device, 'usb');
+        }
+      }
+      
+      // Try serial ports
+      if ('serial' in navigator) {
+        await this.checkSerialPorts();
+      }
+      
+    } catch (error) {
+      console.error('Auto-connect failed:', error);
+      this.status.lastError = error.message;
+    }
+  }
+
+  // Check available serial ports
+  async checkSerialPorts() {
+    try {
+      const ports = await navigator.serial.getPorts();
+      for (const port of ports) {
+        if (!this.devices.serial) {
+          await this.connectSerial(port);
+        }
+      }
+    } catch (error) {
+      console.error('Error checking serial ports:', error);
+    }
+  }
+
+  // Connect to USB device
+  async connectUSB(device) {
+    try {
+      console.log('Connecting to USB device:', device);
+      
+      await device.open();
+      await device.selectConfiguration(1);
+      await device.claimInterface(0);
+      
+      this.devices.usb = device;
+      this.status.connected = true;
+      this.status.deviceType = 'usb';
+      
+      this.emit('usbConnected', device);
+      this.updateStatus();
+      
+      return true;
     } catch (error) {
       console.error('USB connection failed:', error);
-      throw error;
+      this.status.lastError = error.message;
+      this.emit('connectionError', { type: 'usb', error });
+      return false;
     }
   }
 
+  // Disconnect USB device
   async disconnectUSB() {
-    if (this.usbDevice) {
-      try {
-        await this.usbDevice.close();
-        this.usbDevice = null;
-        this.isConnected = false;
-        console.log('USB device disconnected');
-      } catch (error) {
-        console.error('USB disconnect error:', error);
+    try {
+      if (this.devices.usb) {
+        await this.devices.usb.close();
+        this.devices.usb = null;
+        this.status.connected = false;
+        this.status.deviceType = null;
+        
+        this.emit('usbDisconnected');
+        this.updateStatus();
       }
-    }
-  }
-
-  async sendUSBCommand(command) {
-    if (!this.usbDevice || !this.isConnected) {
-      throw new Error('USB device not connected');
-    }
-
-    try {
-      const encoder = new TextEncoder();
-      const data = encoder.encode(command);
-      
-      await this.usbDevice.transferOut(1, data);
-      console.log('USB command sent:', command);
     } catch (error) {
-      console.error('USB command failed:', error);
-      throw error;
+      console.error('USB disconnection failed:', error);
+      this.status.lastError = error.message;
     }
   }
 
-  // ==================== Serial Port Integration ====================
-
-  async connectSerial() {
+  // Connect to serial port
+  async connectSerial(port) {
     try {
-      // Request serial port
-      this.serialPort = await navigator.serial.requestPort({
-        filters: [
-          {
-            usbVendorId: 0x0483,
-            usbProductId: 0x5740
-          },
-          {
-            usbVendorId: 0x04b8,
-            usbProductId: 0x0202
-          }
-        ]
-      });
-
-      await this.serialPort.open({ baudRate: 9600 });
-      this.isConnected = true;
-      console.log('Serial port connected');
-      return this.serialPort;
+      console.log('Connecting to serial port:', port);
+      
+      await port.open({ baudRate: 9600 });
+      
+      this.devices.serial = port;
+      this.status.connected = true;
+      this.status.deviceType = 'serial';
+      
+      this.emit('serialConnected', port);
+      this.updateStatus();
+      
+      return true;
     } catch (error) {
       console.error('Serial connection failed:', error);
-      throw error;
+      this.status.lastError = error.message;
+      this.emit('connectionError', { type: 'serial', error });
+      return false;
     }
   }
 
+  // Disconnect serial port
   async disconnectSerial() {
-    if (this.serialPort) {
-      try {
-        await this.serialPort.close();
-        this.serialPort = null;
-        this.isConnected = false;
-        console.log('Serial port disconnected');
-      } catch (error) {
-        console.error('Serial disconnect error:', error);
+    try {
+      if (this.devices.serial) {
+        await this.devices.serial.close();
+        this.devices.serial = null;
+        this.status.connected = false;
+        this.status.deviceType = null;
+        
+        this.emit('serialDisconnected');
+        this.updateStatus();
       }
+    } catch (error) {
+      console.error('Serial disconnection failed:', error);
+      this.status.lastError = error.message;
     }
   }
 
-  async sendSerialCommand(command) {
-    if (!this.serialPort || !this.isConnected) {
-      throw new Error('Serial port not connected');
-    }
-
+  // Send command to USB device
+  async sendUSBCommand(command) {
     try {
+      if (!this.devices.usb) {
+        throw new Error('No USB device connected');
+      }
+      
       const encoder = new TextEncoder();
       const data = encoder.encode(command);
       
-      const writer = this.serialPort.writable.getWriter();
+      await this.devices.usb.transferOut(1, data);
+      
+      return true;
+    } catch (error) {
+      console.error('USB command failed:', error);
+      this.status.lastError = error.message;
+      return false;
+    }
+  }
+
+  // Send command to serial device
+  async sendSerialCommand(command) {
+    try {
+      if (!this.devices.serial) {
+        throw new Error('No serial device connected');
+      }
+      
+      const encoder = new TextEncoder();
+      const data = encoder.encode(command);
+      
+      const writer = this.devices.serial.writable.getWriter();
       await writer.write(data);
       writer.releaseLock();
       
-      console.log('Serial command sent:', command);
+      return true;
     } catch (error) {
       console.error('Serial command failed:', error);
-      throw error;
+      this.status.lastError = error.message;
+      return false;
     }
   }
 
-  // ==================== Cash Drawer Control ====================
-
+  // Open cash drawer
   async openCashDrawer() {
     try {
-      // ESC/POS command to open cash drawer
-      const command = '\x1B\x70\x00\x19\xFA'; // ESC p 0 25 250ms
+      console.log('Opening cash drawer...');
       
-      if (this.usbDevice) {
+      const command = '\x1B\x70\x00\x19\xFA'; // ESC p command
+      
+      if (this.devices.usb) {
         await this.sendUSBCommand(command);
-      } else if (this.serialPort) {
+      } else if (this.devices.serial) {
         await this.sendSerialCommand(command);
       } else {
-        throw new Error('No hardware connected');
+        throw new Error('No device connected for cash drawer control');
       }
-
-      console.log('Cash drawer opened');
+      
+      this.emit('cashDrawerOpened');
       return true;
     } catch (error) {
       console.error('Failed to open cash drawer:', error);
-      throw error;
+      this.status.lastError = error.message;
+      this.emit('cashDrawerError', error);
+      return false;
     }
   }
 
+  // Close cash drawer
   async closeCashDrawer() {
     try {
-      // ESC/POS command to close cash drawer (if supported)
-      const command = '\x1B\x70\x01\x19\xFA'; // ESC p 1 25 250ms
+      console.log('Closing cash drawer...');
       
-      if (this.usbDevice) {
-        await this.sendUSBCommand(command);
-      } else if (this.serialPort) {
-        await this.sendSerialCommand(command);
-      } else {
-        throw new Error('No hardware connected');
-      }
-
-      console.log('Cash drawer closed');
+      // Most cash drawers don't have a close command
+      // They close automatically when pushed
+      this.emit('cashDrawerClosed');
       return true;
     } catch (error) {
       console.error('Failed to close cash drawer:', error);
-      throw error;
+      this.status.lastError = error.message;
+      return false;
     }
   }
 
-  // ==================== Receipt Printing ====================
-
-  async printReceipt(receiptData) {
+  // Print receipt
+  async printReceipt(receiptData, options = {}) {
     try {
-      const commands = this.generateReceiptCommands(receiptData);
+      this.status.isPrinting = true;
+      this.emit('printingStarted');
       
-      for (const command of commands) {
-        if (this.usbDevice) {
-          await this.sendUSBCommand(command);
-        } else if (this.serialPort) {
-          await this.sendSerialCommand(command);
-        } else {
-          throw new Error('No hardware connected');
-        }
-        
-        // Small delay between commands
-        await new Promise(resolve => setTimeout(resolve, 100));
+      console.log('Printing receipt...');
+      
+      const {
+        format = 'text',
+        paperWidth = this.config.paperWidth,
+        cutPaper = true,
+        openDrawer = this.config.cashDrawerEnabled
+      } = options;
+      
+      let commands = '';
+      
+      if (format === 'escpos') {
+        commands = this.generateReceiptCommands(receiptData, {
+          paperWidth,
+          cutPaper,
+          openDrawer
+        });
+      } else {
+        commands = this.generateTextReceipt(receiptData, {
+          paperWidth
+        });
       }
-
-      console.log('Receipt printed successfully');
+      
+      // Send commands to device
+      if (this.devices.usb) {
+        await this.sendUSBCommand(commands);
+      } else if (this.devices.serial) {
+        await this.sendSerialCommand(commands);
+      } else {
+        throw new Error('No printer device connected');
+      }
+      
+      this.status.isPrinting = false;
+      this.emit('printingCompleted');
+      
       return true;
     } catch (error) {
-      console.error('Receipt printing failed:', error);
-      throw error;
+      console.error('Printing failed:', error);
+      this.status.isPrinting = false;
+      this.status.lastError = error.message;
+      this.emit('printingError', error);
+      return false;
     }
   }
 
-  generateReceiptCommands(receiptData) {
-    const commands = [];
+  // Generate receipt commands
+  generateReceiptCommands(receiptData, options = {}) {
+    const {
+      paperWidth = 80,
+      cutPaper = true,
+      openDrawer = true
+    } = options;
+    
+    let commands = '';
     
     // Initialize printer
-    commands.push('\x1B\x40'); // ESC @ - Initialize printer
-    
-    // Set alignment to center
-    commands.push('\x1B\x61\x01'); // ESC a 1 - Center alignment
+    commands += '\x1B\x40'; // Initialize printer
+    commands += '\x1B\x61\x01'; // Center alignment
+    commands += '\x1B\x21\x00'; // Normal font size
     
     // Print header
-    commands.push(`${receiptData.companyName}\n`);
-    commands.push(`${receiptData.address}\n`);
-    commands.push(`${receiptData.phone}\n`);
-    commands.push('='.repeat(32) + '\n');
-    
-    // Set alignment to left
-    commands.push('\x1B\x61\x00'); // ESC a 0 - Left alignment
+    commands += `${receiptData.companyName.toUpperCase()}\n`;
+    commands += `${receiptData.companyAddress}\n`;
+    commands += `${receiptData.companyPhone}\n\n`;
     
     // Print receipt details
-    commands.push(`Receipt: ${receiptData.receiptNumber}\n`);
-    commands.push(`Date: ${receiptData.date}\n`);
-    commands.push(`Time: ${receiptData.time}\n`);
-    commands.push(`Cashier: ${receiptData.cashier}\n`);
-    commands.push('-'.repeat(32) + '\n');
+    commands += `Receipt #: ${receiptData.receiptNumber}\n`;
+    commands += `Date: ${receiptData.date}\n`;
+    commands += `Cashier: ${receiptData.cashier}\n\n`;
     
     // Print items
-    for (const item of receiptData.items) {
-      commands.push(`${item.name}\n`);
-      commands.push(`  ${item.quantity} x $${item.price.toFixed(2)} = $${item.total.toFixed(2)}\n`);
-    }
+    commands += '─'.repeat(paperWidth - 2) + '\n';
+    commands += 'Item'.padEnd(30) + 'Qty'.padStart(5) + 'Total'.padStart(13) + '\n';
+    commands += '─'.repeat(paperWidth - 2) + '\n';
     
-    commands.push('-'.repeat(32) + '\n');
+    receiptData.items.forEach(item => {
+      const itemName = item.name.length > 30 ? item.name.substring(0, 27) + '...' : item.name;
+      const qty = item.quantity.toString().padStart(5);
+      const total = parseFloat(item.total).toFixed(2).padStart(13);
+      
+      commands += itemName.padEnd(30) + qty + total + '\n';
+    });
+    
+    commands += '─'.repeat(paperWidth - 2) + '\n';
     
     // Print totals
-    commands.push(`Subtotal: $${receiptData.subtotal.toFixed(2)}\n`);
-    commands.push(`Tax: $${receiptData.tax.toFixed(2)}\n`);
-    if (receiptData.discount > 0) {
-      commands.push(`Discount: -$${receiptData.discount.toFixed(2)}\n`);
-    }
-    commands.push(`TOTAL: $${receiptData.total.toFixed(2)}\n`);
-    commands.push('='.repeat(32) + '\n');
-    
-    // Print payment info
-    commands.push(`Payment Method: ${receiptData.paymentMethod}\n`);
-    commands.push(`Status: ${receiptData.status}\n`);
-    commands.push('='.repeat(32) + '\n');
-    
-    // Set alignment to center
-    commands.push('\x1B\x61\x01'); // ESC a 1 - Center alignment
+    commands += `TOTAL:`.padEnd(35) + parseFloat(receiptData.total).toFixed(2).padStart(13) + '\n\n';
     
     // Print footer
-    commands.push('Thank you for your business!\n');
-    commands.push('Please come again!\n');
-    commands.push('='.repeat(32) + '\n');
+    commands += 'Thank you for your purchase!\n';
+    commands += 'Please visit us again\n\n';
     
     // Cut paper
-    commands.push('\x1D\x56\x00'); // GS V 0 - Full cut
+    if (cutPaper) {
+      commands += '\x1D\x56\x00'; // Full cut
+    }
+    
+    // Open cash drawer
+    if (openDrawer) {
+      commands += '\x1B\x70\x00\x19\xFA'; // Open drawer 1
+    }
     
     return commands;
   }
 
-  // ==================== Barcode Scanner Integration ====================
+  // Generate text receipt
+  generateTextReceipt(receiptData, options = {}) {
+    const { paperWidth = 80 } = options;
+    
+    let receipt = '';
+    const divider = '─'.repeat(paperWidth);
+    const centerAlign = (text) => {
+      const padding = Math.max(0, Math.floor((paperWidth - text.length) / 2));
+      return ' '.repeat(padding) + text;
+    };
+    
+    // Header
+    receipt += centerAlign(receiptData.companyName.toUpperCase()) + '\n';
+    receipt += centerAlign(receiptData.companyAddress) + '\n';
+    receipt += centerAlign(receiptData.companyPhone) + '\n\n';
+    receipt += divider + '\n';
+    
+    // Receipt details
+    receipt += `Receipt #: ${receiptData.receiptNumber}\n`;
+    receipt += `Date: ${receiptData.date}\n`;
+    receipt += `Cashier: ${receiptData.cashier}\n\n`;
+    
+    // Items
+    receipt += 'ITEMS:\n';
+    receipt += divider + '\n';
+    receipt += 'Item'.padEnd(30) + 'Qty'.padStart(5) + 'Price'.padStart(10) + 'Total'.padStart(10) + '\n';
+    receipt += divider + '\n';
+    
+    receiptData.items.forEach(item => {
+      const itemName = item.name.length > 30 ? item.name.substring(0, 27) + '...' : item.name;
+      const qty = item.quantity.toString().padStart(5);
+      const price = parseFloat(item.price).toFixed(2).padStart(10);
+      const total = parseFloat(item.total).toFixed(2).padStart(10);
+      
+      receipt += itemName.padEnd(30) + qty + price + total + '\n';
+    });
+    
+    receipt += divider + '\n';
+    
+    // Totals
+    receipt += `Subtotal:`.padEnd(45) + parseFloat(receiptData.subtotal).toFixed(2).padStart(10) + '\n';
+    if (receiptData.tax > 0) {
+      receipt += `Tax:`.padEnd(45) + parseFloat(receiptData.tax).toFixed(2).padStart(10) + '\n';
+    }
+    receipt += divider + '\n';
+    receipt += `TOTAL:`.padEnd(45) + parseFloat(receiptData.total).toFixed(2).padStart(10) + '\n\n';
+    
+    // Footer
+    receipt += divider + '\n';
+    receipt += centerAlign('Thank you for your purchase!') + '\n';
+    receipt += centerAlign('Please visit us again') + '\n';
+    receipt += divider + '\n';
+    
+    return receipt;
+  }
 
-  async setupBarcodeScanner() {
+  // Setup barcode scanner
+  setupBarcodeScanner() {
     try {
-      // Request USB device for barcode scanner
-      const barcodeScanner = await navigator.usb.requestDevice({
-        filters: [
-          {
-            vendorId: 0x0483, // Common barcode scanner vendor
-            productId: 0x5740
-          }
-        ]
+      // Listen for keyboard input (barcode scanners typically act as keyboards)
+      document.addEventListener('keydown', (event) => {
+        this.handleBarcodeData(event);
       });
-
-      await barcodeScanner.open();
-      await barcodeScanner.selectConfiguration(1);
-      await barcodeScanner.claimInterface(0);
-
-      // Set up event listener for barcode data
-      barcodeScanner.addEventListener('transferin', (event) => {
-        const data = new TextDecoder().decode(event.data);
-        this.handleBarcodeData(data);
-      });
-
-      console.log('Barcode scanner connected');
-      return barcodeScanner;
+      
+      console.log('Barcode scanner setup completed');
     } catch (error) {
-      console.error('Barcode scanner connection failed:', error);
-      throw error;
+      console.error('Barcode scanner setup failed:', error);
+      this.status.lastError = error.message;
     }
   }
 
-  handleBarcodeData(data) {
-    // Emit custom event for barcode data
-    const event = new CustomEvent('barcodeScanned', {
-      detail: { barcode: data.trim() }
-    });
-    window.dispatchEvent(event);
+  // Handle barcode data
+  handleBarcodeData(event) {
+    // Barcode scanners typically send data as keyboard input
+    // We need to accumulate the characters and detect when scanning is complete
+    
+    if (this.status.isScanning) {
+      // Continue accumulating characters
+      this.currentBarcode += event.key;
+    } else {
+      // Start new barcode scan
+      this.status.isScanning = true;
+      this.currentBarcode = event.key;
+      
+      // Clear the barcode after a short delay
+      setTimeout(() => {
+        if (this.currentBarcode) {
+          this.emit('barcodeScanned', this.currentBarcode);
+          this.currentBarcode = '';
+        }
+        this.status.isScanning = false;
+      }, 100);
+    }
   }
 
-  // ==================== Hardware Status ====================
-
-  async getHardwareStatus() {
+  // Get hardware status
+  getHardwareStatus() {
     return {
-      usbConnected: !!this.usbDevice,
-      serialConnected: !!this.serialPort,
-      isConnected: this.isConnected,
-      deviceName: this.usbDevice?.productName || this.serialPort?.getInfo()?.usbProductId || 'Unknown'
+      ...this.status,
+      devices: Object.keys(this.devices).reduce((acc, key) => {
+        acc[key] = this.devices[key] !== null;
+        return acc;
+      }, {}),
+      config: this.config
     };
   }
 
+  // Test connection
   async testConnection() {
     try {
-      if (this.usbDevice) {
-        await this.sendUSBCommand('\x1B\x40'); // Initialize printer
-        return { success: true, type: 'USB' };
-      } else if (this.serialPort) {
-        await this.sendSerialCommand('\x1B\x40'); // Initialize printer
-        return { success: true, type: 'Serial' };
-      } else {
-        return { success: false, error: 'No hardware connected' };
+      console.log('Testing hardware connection...');
+      
+      let success = false;
+      
+      if (this.devices.usb) {
+        success = await this.sendUSBCommand('\x1B\x40'); // Initialize command
+      } else if (this.devices.serial) {
+        success = await this.sendSerialCommand('\x1B\x40'); // Initialize command
       }
+      
+      this.emit('connectionTested', { success });
+      return success;
     } catch (error) {
-      return { success: false, error: error.message };
+      console.error('Connection test failed:', error);
+      this.status.lastError = error.message;
+      this.emit('connectionTested', { success: false, error });
+      return false;
     }
   }
 
-  // ==================== Utility Methods ====================
-
+  // Detect hardware
   async detectHardware() {
-    const devices = [];
-    
     try {
-      // Try to detect USB devices
-      const usbDevices = await navigator.usb.getDevices();
-      devices.push(...usbDevices.map(device => ({
-        type: 'USB',
-        name: device.productName,
-        vendorId: device.vendorId,
-        productId: device.productId
-      })));
+      console.log('Detecting hardware...');
+      
+      const detected = {
+        usb: [],
+        serial: [],
+        printers: [],
+        scanners: [],
+        cashDrawers: []
+      };
+      
+      // Detect USB devices
+      if ('usb' in navigator) {
+        const devices = await navigator.usb.getDevices();
+        detected.usb = devices;
+        
+        devices.forEach(device => {
+          if (this.isPrinter(device)) {
+            detected.printers.push(device);
+          } else if (this.isBarcodeScanner(device)) {
+            detected.scanners.push(device);
+          } else if (this.isCashDrawer(device)) {
+            detected.cashDrawers.push(device);
+          }
+        });
+      }
+      
+      // Detect serial ports
+      if ('serial' in navigator) {
+        const ports = await navigator.serial.getPorts();
+        detected.serial = ports;
+      }
+      
+      this.emit('hardwareDetected', detected);
+      return detected;
     } catch (error) {
-      console.log('USB detection not available');
+      console.error('Hardware detection failed:', error);
+      this.status.lastError = error.message;
+      return null;
     }
-
-    try {
-      // Try to detect serial ports
-      const ports = await navigator.serial.getPorts();
-      devices.push(...ports.map(port => ({
-        type: 'Serial',
-        name: 'Serial Port',
-        info: port.getInfo()
-      })));
-    } catch (error) {
-      console.log('Serial detection not available');
-    }
-
-    return devices;
   }
 
-  async autoConnect() {
+  // Update status
+  updateStatus() {
+    this.status.connected = Object.values(this.devices).some(device => device !== null);
+    this.emit('statusUpdated', this.getHardwareStatus());
+  }
+
+  // Event handling
+  on(event, callback) {
+    if (!this.eventListeners.has(event)) {
+      this.eventListeners.set(event, []);
+    }
+    this.eventListeners.get(event).push(callback);
+  }
+
+  off(event, callback) {
+    if (this.eventListeners.has(event)) {
+      const listeners = this.eventListeners.get(event);
+      const index = listeners.indexOf(callback);
+      if (index > -1) {
+        listeners.splice(index, 1);
+      }
+    }
+  }
+
+  emit(event, data) {
+    if (this.eventListeners.has(event)) {
+      this.eventListeners.get(event).forEach(callback => {
+        try {
+          callback(data);
+        } catch (error) {
+          console.error(`Error in event listener for ${event}:`, error);
+        }
+      });
+    }
+  }
+
+  // Configuration methods
+  updateConfig(newConfig) {
+    this.config = { ...this.config, ...newConfig };
+    this.emit('configUpdated', this.config);
+  }
+
+  getConfig() {
+    return { ...this.config };
+  }
+
+  // Cleanup
+  destroy() {
     try {
-      // Try USB first
-      const usbDevices = await navigator.usb.getDevices();
-      if (usbDevices.length > 0) {
-        await this.connectUSB();
-        return { type: 'USB', device: usbDevices[0] };
-      }
-
-      // Try serial port
-      const ports = await navigator.serial.getPorts();
-      if (ports.length > 0) {
-        await this.connectSerial();
-        return { type: 'Serial', device: ports[0] };
-      }
-
-      throw new Error('No compatible hardware found');
+      // Disconnect all devices
+      this.disconnectUSB();
+      this.disconnectSerial();
+      
+      // Remove event listeners
+      this.eventListeners.clear();
+      
+      console.log('POS Hardware service destroyed');
     } catch (error) {
-      console.error('Auto-connect failed:', error);
-      throw error;
+      console.error('Error destroying POS Hardware service:', error);
     }
   }
 }
