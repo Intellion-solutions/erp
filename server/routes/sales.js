@@ -9,6 +9,137 @@ const { generateInvoicePDF } = require('../services/invoiceService');
 const router = express.Router();
 const prisma = new PrismaClient();
 
+// ==================== RECURRING INVOICES ====================
+const { io } = require('../services/socketService');
+
+// Get all recurring invoices
+router.get('/recurring', authenticateToken, async (req, res) => {
+  try {
+    const rec = await prisma.recurringInvoice.findMany({ include: { sale: true } });
+    res.json(rec);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch recurring invoices' });
+  }
+});
+
+// Create recurring invoice
+router.post('/recurring', authenticateToken, [
+  body('saleId').notEmpty(),
+  body('schedule').notEmpty(),
+  body('nextRun').notEmpty()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    const { saleId, schedule, nextRun } = req.body;
+    const recurring = await prisma.recurringInvoice.create({ data: { saleId, schedule, nextRun: new Date(nextRun) } });
+    await createAuditLog({ userId: req.user.id, action: 'CREATE', entity: 'RecurringInvoice', entityId: recurring.id, newValues: recurring });
+    res.status(201).json(recurring);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to create recurring invoice' });
+  }
+});
+
+// ==================== CREDIT NOTES ====================
+
+// Get all credit notes
+router.get('/credit-notes', authenticateToken, async (req, res) => {
+  try {
+    const notes = await prisma.creditNote.findMany({ include: { sale: true, issuedBy: true, approvedBy: true } });
+    res.json(notes);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch credit notes' });
+  }
+});
+
+// Create credit note
+router.post('/credit-notes', authenticateToken, [
+  body('saleId').notEmpty(),
+  body('amount').isFloat({ min: 0 }),
+  body('reason').notEmpty()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    const { saleId, amount, reason } = req.body;
+    const note = await prisma.creditNote.create({ data: { saleId, amount, reason, issuedById: req.user.id } });
+    await createAuditLog({ userId: req.user.id, action: 'CREATE', entity: 'CreditNote', entityId: note.id, newValues: note });
+    res.status(201).json(note);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to create credit note' });
+  }
+});
+
+// Approve credit note
+router.post('/credit-notes/:id/approve', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const note = await prisma.creditNote.update({ where: { id }, data: { status: 'APPROVED', approvedById: req.user.id, approvedAt: new Date() } });
+    await createAuditLog({ userId: req.user.id, action: 'APPROVE', entity: 'CreditNote', entityId: id, newValues: note });
+    res.json(note);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to approve credit note' });
+  }
+});
+
+// ==================== SALES TARGETS & COMMISSIONS ====================
+
+// Get all sales targets
+router.get('/sales-targets', authenticateToken, async (req, res) => {
+  try {
+    const targets = await prisma.salesTarget.findMany({ include: { user: true, commissions: true } });
+    res.json(targets);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch sales targets' });
+  }
+});
+
+// Create sales target
+router.post('/sales-targets', authenticateToken, [
+  body('userId').notEmpty(),
+  body('period').notEmpty(),
+  body('targetAmount').isFloat({ min: 0 })
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    const { userId, period, targetAmount } = req.body;
+    const target = await prisma.salesTarget.create({ data: { userId, period, targetAmount } });
+    await createAuditLog({ userId: req.user.id, action: 'CREATE', entity: 'SalesTarget', entityId: target.id, newValues: target });
+    res.status(201).json(target);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to create sales target' });
+  }
+});
+
+// Get all commissions
+router.get('/commissions', authenticateToken, async (req, res) => {
+  try {
+    const commissions = await prisma.commission.findMany({ include: { salesTarget: true, sale: true, user: true } });
+    res.json(commissions);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch commissions' });
+  }
+});
+
+// ==================== REAL-TIME STATUS (STUB) ====================
+
+function emitSaleStatusUpdate(saleId, status) {
+  if (io) io.emit('saleStatusUpdated', { saleId, status });
+}
+
+// ==================== EMAIL/SMS DELIVERY (STUB) ====================
+
+router.post('/:id/send-email', authenticateToken, async (req, res) => {
+  // Stub: integrate with email service
+  res.json({ message: 'Invoice email sent (stub)' });
+});
+
+router.post('/:id/send-sms', authenticateToken, async (req, res) => {
+  // Stub: integrate with SMS service
+  res.json({ message: 'Invoice SMS sent (stub)' });
+});
+
 // Get all sales
 router.get('/', authenticateToken, async (req, res) => {
   try {
