@@ -28,6 +28,8 @@ const settingRoutes = require('./routes/settings');
 const auditRoutes = require('./routes/audit');
 const posRoutes = require('./routes/pos');
 const notificationRoutes = require('./routes/notifications');
+const hrRoutes = require('./routes/hr');
+const accountingRoutes = require('./routes/accounting');
 
 const app = express();
 const server = createServer(app);
@@ -88,6 +90,8 @@ app.use('/api/settings', settingRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/pos', posRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/hr', hrRoutes);
+app.use('/api/accounting', accountingRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
