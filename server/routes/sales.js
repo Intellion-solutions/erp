@@ -5,6 +5,7 @@ const { authenticateToken, requireRole } = require('../middleware/auth');
 const { logger } = require('../utils/logger');
 const { createAuditLog } = require('../services/auditService');
 const { generateInvoicePDF } = require('../services/invoiceService');
+const settingsService = require('../services/settingsService');
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -288,6 +289,10 @@ router.post('/', [
 
     const { customerId, items, paymentMethod, notes, terminalId } = req.body;
 
+    // Get invoice settings
+    const invoiceSettings = await settingsService.getInvoiceSettings();
+    const taxRate = invoiceSettings.taxRate;
+
     // Validate customer if provided
     if (customerId) {
       const customer = await prisma.customer.findUnique({
@@ -319,7 +324,7 @@ router.post('/', [
       }
 
       const itemTotal = (item.unitPrice * item.quantity) - (item.discount || 0);
-      const itemTax = itemTotal * (product.taxRate / 100);
+      const itemTax = itemTotal * (taxRate / 100); // Use configured tax rate
       
       subtotal += itemTotal;
       taxAmount += itemTax;
@@ -327,13 +332,25 @@ router.post('/', [
 
     total = subtotal + taxAmount;
 
-    // Generate sale number
-    const saleNumber = `SALE-${Date.now()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
+    // Generate sale number using settings
+    const lastSale = await prisma.sale.findFirst({
+      orderBy: { createdAt: 'desc' }
+    });
+
+    let nextNumber = invoiceSettings.numberingStart;
+    if (lastSale) {
+      const lastNumber = parseInt(lastSale.saleNumber.replace(/\D/g, '')) || 0;
+      nextNumber = lastNumber + 1;
+    }
+
+    const paddedNumber = nextNumber.toString().padStart(invoiceSettings.numberingPadding, '0');
+    const saleNumber = `${invoiceSettings.numberingPrefix}${paddedNumber}${invoiceSettings.numberingSuffix}`;
 
     // Create sale with items
     const sale = await prisma.sale.create({
       data: {
         saleNumber,
+        customNumber: saleNumber, // Store the formatted number
         customerId,
         userId: req.user.id,
         subtotal,
@@ -342,18 +359,19 @@ router.post('/', [
         paymentMethod,
         notes,
         terminalId,
+        currencyId: null, // Will be set based on settings
         items: {
           create: items.map(item => {
             const product = items.find(p => p.productId === item.productId);
             const itemTotal = (item.unitPrice * item.quantity) - (item.discount || 0);
-            const itemTax = itemTotal * (product.taxRate / 100);
+            const itemTax = itemTotal * (taxRate / 100);
             
             return {
               productId: item.productId,
               quantity: item.quantity,
               unitPrice: item.unitPrice,
               discount: item.discount || 0,
-              taxRate: product.taxRate,
+              taxRate: taxRate, // Use configured tax rate
               total: itemTotal + itemTax
             };
           })
@@ -387,7 +405,7 @@ router.post('/', [
         }
       });
 
-      // Create stock movement
+      // Log stock movement
       await prisma.stockMovement.create({
         data: {
           productId: item.productId,
@@ -399,7 +417,11 @@ router.post('/', [
       });
     }
 
-    // Create audit log
+    // Emit real-time update
+    if (io) {
+      io.emit('saleCreated', sale);
+    }
+
     await createAuditLog({
       userId: req.user.id,
       action: 'CREATE',

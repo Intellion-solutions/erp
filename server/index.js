@@ -32,6 +32,9 @@ const hrRoutes = require('./routes/hr');
 const accountingRoutes = require('./routes/accounting');
 const adminRoutes = require('./routes/admin');
 
+// Import services
+const settingsService = require('./services/settingsService');
+
 const app = express();
 const server = createServer(app);
 const io = new Server(server, {
@@ -122,6 +125,10 @@ async function startServer() {
     // Connect to MongoDB
     await connectMongoDB();
     logger.info('Connected to MongoDB');
+
+    // Initialize Settings Service
+    await settingsService.initialize();
+    logger.info('Settings service initialized');
 
     // Initialize Socket.IO
     // initializeSocket(io); // This line is removed as per the edit hint

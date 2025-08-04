@@ -9,9 +9,21 @@ const { logger } = require('../utils/logger');
 const { authenticateToken, canProcessSales } = require('../middleware/auth');
 const { auditLog } = require('../services/auditService');
 const { sendToTerminal, broadcastToAll, updateDashboard } = require('../services/socketService');
+const settingsService = require('../services/settingsService');
 
 const router = express.Router();
 const prisma = new PrismaClient();
+
+// Get POS settings
+router.get('/settings', authenticateToken, async (req, res) => {
+  try {
+    const posSettings = await settingsService.getPOSSettings();
+    res.json(posSettings);
+  } catch (error) {
+    logger.error('Error fetching POS settings:', error);
+    res.status(500).json({ error: 'Failed to fetch POS settings' });
+  }
+});
 
 // Get all active products for POS
 router.get('/products', [authenticateToken, canProcessSales], async (req, res) => {
@@ -92,8 +104,21 @@ router.post('/sale/start', [authenticateToken, canProcessSales], async (req, res
   try {
     const { customerId, terminalId } = req.body;
 
-    // Generate unique sale number
-    const saleNumber = `SALE-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    // Get POS settings for receipt configuration
+    const posSettings = await settingsService.getPOSSettings();
+
+    // Generate unique sale number using settings
+    const lastSale = await prisma.sale.findFirst({
+      orderBy: { createdAt: 'desc' }
+    });
+
+    let nextNumber = 1;
+    if (lastSale) {
+      const lastNumber = parseInt(lastSale.saleNumber.replace(/\D/g, '')) || 0;
+      nextNumber = lastNumber + 1;
+    }
+
+    const saleNumber = `POS-${nextNumber.toString().padStart(6, '0')}`;
 
     const saleData = {
       saleNumber,

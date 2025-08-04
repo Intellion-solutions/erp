@@ -2,6 +2,7 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { PrismaClient } = require('@prisma/client');
 const { createAuditLog } = require('../services/auditService');
+const settingsService = require('../services/settingsService');
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -21,17 +22,21 @@ router.get('/summary', async (req, res) => {
     const fromDate = dateFrom ? new Date(dateFrom) : new Date(new Date().setDate(new Date().getDate() - 30));
     const toDate = dateTo ? new Date(dateTo) : new Date();
 
+    // Get inventory settings
+    const inventorySettings = await settingsService.getInventorySettings();
+    const lowStockThreshold = inventorySettings.lowStockThreshold;
+
     // Get total products
     const totalProducts = await prisma.product.count({
       where: { status: 'ACTIVE' }
     });
 
-    // Get low stock products
+    // Get low stock products using configured threshold
     const lowStockProducts = await prisma.product.count({
       where: {
         status: 'ACTIVE',
         stockQuantity: {
-          lte: 10
+          lte: lowStockThreshold
         }
       }
     });
@@ -87,7 +92,8 @@ router.get('/summary', async (req, res) => {
         lowStockProducts,
         outOfStockProducts,
         totalValue: parseFloat(totalValue.toFixed(2)),
-        recentMovements
+        recentMovements,
+        lowStockThreshold // Include threshold in response
       },
       movementsByType: movementsByType.reduce((acc, movement) => {
         acc[movement.type] = movement._count.type;
