@@ -30,6 +30,7 @@ const posRoutes = require('./routes/pos');
 const notificationRoutes = require('./routes/notifications');
 const hrRoutes = require('./routes/hr');
 const accountingRoutes = require('./routes/accounting');
+const adminRoutes = require('./routes/admin');
 
 const app = express();
 const server = createServer(app);
@@ -92,6 +93,7 @@ app.use('/api/pos', posRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/hr', hrRoutes);
 app.use('/api/accounting', accountingRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
