@@ -173,8 +173,17 @@ const getAuditStats = async (startDate, endDate) => {
   }
 };
 
+/**
+ * Create audit log (wrapper for auditLog function)
+ */
+const createAuditLog = async ({ userId, action, entity, entityId, oldValues, newValues, ipAddress, userAgent }) => {
+  return await auditLog(action, entity, entityId, oldValues, newValues, { user: { id: userId }, ip: ipAddress, get: () => userAgent });
+};
+
 module.exports = {
   auditLog,
+  createAuditLog,
+
   getAuditLogs,
   getAuditStats
 };

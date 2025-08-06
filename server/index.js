@@ -24,10 +24,17 @@ const saleRoutes = require('./routes/sales');
 const purchaseRoutes = require('./routes/purchases');
 const inventoryRoutes = require('./routes/inventory');
 const reportRoutes = require('./routes/reports');
-const settingRoutes = require('./routes/settings');
+const createSettingsRouter = require('./routes/settings');
 const auditRoutes = require('./routes/audit');
 const posRoutes = require('./routes/pos');
 const notificationRoutes = require('./routes/notifications');
+const hrRoutes = require('./routes/hr');
+const accountingRoutes = require('./routes/accounting');
+const adminRoutes = require('./routes/admin');
+
+// Import services
+const settingsService = require('./services/settingsService');
+
 
 const app = express();
 const server = createServer(app);
@@ -84,10 +91,14 @@ app.use('/api/sales', saleRoutes);
 app.use('/api/purchases', purchaseRoutes);
 app.use('/api/inventory', inventoryRoutes);
 app.use('/api/reports', reportRoutes);
-app.use('/api/settings', settingRoutes);
+app.use('/api/settings', createSettingsRouter(io));
 app.use('/api/audit', auditRoutes);
 app.use('/api/pos', posRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/hr', hrRoutes);
+app.use('/api/accounting', accountingRoutes);
+app.use('/api/admin', adminRoutes);
+
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -116,6 +127,11 @@ async function startServer() {
     // Connect to MongoDB
     await connectMongoDB();
     logger.info('Connected to MongoDB');
+
+    // Initialize Settings Service
+    await settingsService.initialize();
+    logger.info('Settings service initialized');
+
 
     // Initialize Socket.IO
     // initializeSocket(io); // This line is removed as per the edit hint

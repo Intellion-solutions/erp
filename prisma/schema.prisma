@@ -28,6 +28,13 @@ enum TransactionType {
   RETURN
   ADJUSTMENT
   TRANSFER
+  DEBIT
+  CREDIT
+  JOURNAL
+  BANK_TRANSFER
+  PAYMENT
+  RECEIPT
+
 }
 
 enum PaymentMethod {
@@ -62,6 +69,103 @@ enum OrderStatus {
   CANCELLED
 }
 
+
+
+model UserRole {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  isSystem    Boolean  @default(false)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  users       User[]
+  permissions RolePermission[]
+  @@map("user_roles")
+}
+
+model Permission {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  module      String   // e.g., 'sales', 'inventory', 'finance'
+  action      String   // e.g., 'create', 'read', 'update', 'delete'
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  roles       RolePermission[]
+  @@map("permissions")
+}
+
+model RolePermission {
+  id           String     @id @default(cuid())
+  roleId       String
+  permissionId String
+  createdAt    DateTime   @default(now())
+  role         UserRole   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserSession {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  ipAddress String?
+  userAgent String?
+  isActive  Boolean  @default(true)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@map("user_sessions")
+}
+
+model SystemNotification {
+  id        String   @id @default(cuid())
+  title     String
+  message   String
+  type      NotificationType @default(INFO)
+  priority  NotificationPriority @default(NORMAL)
+  isActive  Boolean  @default(true)
+  expiresAt DateTime?
+  createdById String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy User     @relation("SystemNotificationCreatedBy", fields: [createdById], references: [id])
+  @@map("system_notifications")
+}
+
+enum NotificationType {
+  INFO
+  SUCCESS
+  WARNING
+  ERROR
+}
+
+enum NotificationPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+model Theme {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  primaryColor String
+  secondaryColor String
+  backgroundColor String
+  textColor   String
+  isDefault   Boolean  @default(false)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  @@map("themes")
+}
+
 model User {
   id          String     @id @default(cuid())
   email       String     @unique
@@ -69,6 +173,8 @@ model User {
   firstName   String
   lastName    String
   phone       String?
+  roleId      String?
+  role        UserRole?  @relation(fields: [roleId], references: [id])
   role        Role       @default(SALESPERSON)
   status      UserStatus @default(ACTIVE)
   password    String
@@ -77,6 +183,19 @@ model User {
   updatedAt   DateTime   @updatedAt
   
   // Relations
+  sessions    UserSession[]
+  systemNotifications SystemNotification[] @relation("SystemNotificationCreatedBy")
+  sales       Sale[]
+  purchases   Purchase[]
+  auditLogs   AuditLog[]
+  notifications Notification[]
+  approvalsRequested Approval[] @relation("ApprovalRequestedBy")
+  approvalsApproved  Approval[] @relation("ApprovalApprovedBy")
+  creditNotesIssued CreditNote[] @relation("CreditNoteIssuedBy")
+  creditNotesApproved CreditNote[] @relation("CreditNoteApprovedBy")
+  salesTargets SalesTarget[]
+  commissions Commission[] @relation("UserCommissions")
+
   sales       Sale[]
   purchases   Purchase[]
   auditLogs   AuditLog[]
@@ -170,6 +289,8 @@ model Customer {
 model Sale {
   id            String        @id @default(cuid())
   saleNumber    String        @unique
+  customNumber  String?
+
   customerId    String?
   userId        String
   subtotal      Decimal       @db.Decimal(10, 2)
@@ -180,16 +301,25 @@ model Sale {
   paymentStatus PaymentStatus @default(PENDING)
   notes         String?
   terminalId    String?
+  currencyId    String?
+  currency      Currency?     @relation(fields: [currencyId], references: [id])
   
   // Relations
   customer      Customer?     @relation(fields: [customerId], references: [id])
   user          User          @relation(fields: [userId], references: [id])
   items         SaleItem[]
   payments      Payment[]
+  creditNotes   CreditNote[]
+  recurringInvoices RecurringInvoice[]
+  commissions   Commission[]
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
   
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
   
+
   @@map("sales")
 }
 
@@ -260,6 +390,13 @@ model Payment {
   notes         String?
   saleId        String?
   purchaseId    String?
+  currencyId    String?
+  currency      Currency?     @relation(fields: [currencyId], references: [id])
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  sale          Sale?         @relation(fields: [saleId], references: [id])
+  purchase      Purchase?     @relation(fields: [purchaseId], references: [id])
+
   
   // Relations
   sale          Sale?         @relation(fields: [saleId], references: [id])
@@ -316,4 +453,403 @@ model Setting {
   updatedAt   DateTime @updatedAt
   
   @@map("settings")
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String?
+  title     String
+  message   String
+  type      String   @default("INFO") // INFO, WARNING, ERROR, SUCCESS
+  read      Boolean  @default(false)
+  data      Json?
+  
+  // Relations
+  user      User?    @relation(fields: [userId], references: [id])
+  
+  createdAt DateTime @default(now())
+  
+  @@map("notifications")
+}
+
+// HR Module Models
+model Employee {
+  id            String        @id @default(cuid())
+  employeeId    String        @unique
+  firstName     String
+  lastName      String
+  email         String        @unique
+  phone         String?
+  address       String?
+  dateOfBirth   DateTime?
+  hireDate      DateTime      @default(now())
+  position      String
+  department    String
+  salary        Decimal       @db.Decimal(10, 2)
+  status        EmployeeStatus @default(ACTIVE)
+  
+  // Relations
+  attendances   Attendance[]
+  payrolls      Payroll[]
+  
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  
+  @@map("employees")
+}
+
+model Attendance {
+  id          String   @id @default(cuid())
+  employeeId  String
+  date        DateTime @db.Date
+  clockIn     DateTime?
+  clockOut    DateTime?
+  totalHours  Decimal? @db.Decimal(5, 2)
+  status      AttendanceStatus @default(PRESENT)
+  notes       String?
+  
+  // Relations
+  employee    Employee @relation(fields: [employeeId], references: [id])
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@map("attendances")
+}
+
+model Payroll {
+  id            String   @id @default(cuid())
+  employeeId    String
+  period        String   // e.g., "2024-01"
+  basicSalary   Decimal  @db.Decimal(10, 2)
+  allowances    Decimal  @default(0) @db.Decimal(10, 2)
+  deductions    Decimal  @default(0) @db.Decimal(10, 2)
+  overtime      Decimal  @default(0) @db.Decimal(10, 2)
+  netSalary     Decimal  @db.Decimal(10, 2)
+  status        PayrollStatus @default(PENDING)
+  paidDate      DateTime?
+  
+  // Relations
+  employee      Employee @relation(fields: [employeeId], references: [id])
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  @@map("payrolls")
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  INACTIVE
+  TERMINATED
+  ON_LEAVE
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  HALF_DAY
+  ON_LEAVE
+}
+
+enum PayrollStatus {
+  PENDING
+  PROCESSED
+  PAID
+  CANCELLED
+}
+
+// Accounting and Finance Models
+model Account {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  name        String
+  type        AccountType
+  category    String
+  balance     Decimal  @default(0) @db.Decimal(15, 2)
+  currencyId  String?
+  costCenterId String?
+  currency    Currency? @relation(fields: [currencyId], references: [id])
+  costCenter  CostCenter? @relation(fields: [costCenterId], references: [id])
+  isActive    Boolean  @default(true)
+  description String?
+  transactions Transaction[]
+  journalItems JournalItem[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  @@map("accounts")
+}
+
+model Transaction {
+  id          String   @id @default(cuid())
+  accountId   String
+  type        TransactionType
+  amount      Decimal  @db.Decimal(15, 2)
+  description String
+  reference   String?
+  date        DateTime @default(now())
+  isReconciled Boolean @default(false)
+  currencyId  String?
+  currency    Currency? @relation(fields: [currencyId], references: [id])
+  account     Account  @relation(fields: [accountId], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  @@map("transactions")
+}
+
+model JournalEntry {
+  id          String   @id @default(cuid())
+  entryNumber String   @unique
+  date        DateTime @default(now())
+  description String
+  reference   String?
+  isPosted    Boolean  @default(false)
+  postedAt    DateTime?
+  postedBy    String?
+  currencyId  String?
+  currency    Currency? @relation(fields: [currencyId], references: [id])
+  // Relations
+  journalItems JournalItem[]
+  recurringJournals RecurringJournal[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  @@map("journal_entries")
+}
+
+model JournalItem {
+  id            String   @id @default(cuid())
+  journalEntryId String
+  accountId     String
+  debit         Decimal  @default(0) @db.Decimal(15, 2)
+  credit        Decimal  @default(0) @db.Decimal(15, 2)
+  description   String?
+  
+  // Relations
+  journalEntry  JournalEntry @relation(fields: [journalEntryId], references: [id])
+  account       Account      @relation(fields: [accountId], references: [id])
+  
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  
+  @@map("journal_items")
+}
+
+model BankAccount {
+  id          String   @id @default(cuid())
+  accountNumber String @unique
+  bankName    String
+  accountType String
+  balance     Decimal  @default(0) @db.Decimal(15, 2)
+  currency    String   @default("USD")
+  isActive    Boolean  @default(true)
+  // Relations
+  bankTransactions BankTransaction[]
+  
+  lastReconciled DateTime?
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@map("bank_accounts")
+}
+
+model BankTransaction {
+  id          String   @id @default(cuid())
+  bankAccountId String
+  transactionDate DateTime
+  description String
+  amount      Decimal  @db.Decimal(15, 2)
+  type        BankTransactionType
+  reference   String?
+  isReconciled Boolean @default(false)
+  
+  // Relations
+  bankAccount BankAccount @relation(fields: [bankAccountId], references: [id])
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@map("bank_transactions")
+}
+
+enum AccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+}
+
+enum BankTransactionType {
+  DEPOSIT
+  WITHDRAWAL
+  TRANSFER
+  FEE
+  INTEREST
+}
+
+// --- Finance & Accounting Enhancements ---
+model Currency {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  symbol    String
+  isDefault Boolean  @default(false)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  exchangeRatesFrom ExchangeRate[] @relation("FromCurrency")
+  exchangeRatesTo   ExchangeRate[] @relation("ToCurrency")
+  accounts  Account[]
+  transactions Transaction[]
+  budgets    Budget[]
+  journalEntries JournalEntry[]
+  sales     Sale[]
+  payments  Payment[]
+  @@map("currencies")
+}
+
+model ExchangeRate {
+  id            String   @id @default(cuid())
+  fromCurrencyId String
+  toCurrencyId   String
+  rate          Decimal  @db.Decimal(18, 8)
+  validFrom     DateTime
+  validTo       DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  fromCurrency  Currency @relation("FromCurrency", fields: [fromCurrencyId], references: [id])
+  toCurrency    Currency @relation("ToCurrency", fields: [toCurrencyId], references: [id])
+  @@map("exchange_rates")
+}
+
+model CostCenter {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  code      String   @unique
+  isActive  Boolean  @default(true)
+  budgets   Budget[]
+  accounts  Account[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@map("cost_centers")
+}
+
+model Budget {
+  id           String   @id @default(cuid())
+  name         String
+  year         Int
+  period       String   // e.g., Q1, Q2, Q3, Q4, or month
+  amount       Decimal  @db.Decimal(15, 2)
+  spent        Decimal  @default(0) @db.Decimal(15, 2)
+  costCenterId String
+  currencyId   String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  costCenter   CostCenter @relation(fields: [costCenterId], references: [id])
+  currency     Currency   @relation(fields: [currencyId], references: [id])
+  @@map("budgets")
+}
+
+model RecurringJournal {
+  id            String   @id @default(cuid())
+  name          String
+  schedule      String   // cron or ISO 8601 duration
+  nextRun       DateTime
+  isActive      Boolean  @default(true)
+  journalEntryId String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  journalEntry  JournalEntry @relation(fields: [journalEntryId], references: [id])
+  @@map("recurring_journals")
+}
+
+model Approval {
+  id            String   @id @default(cuid())
+  entityType    String   // e.g., 'Transaction', 'JournalEntry', etc.
+  entityId      String
+  status        ApprovalStatus @default(PENDING)
+  requestedById String
+  approvedById  String?
+  requestedAt   DateTime @default(now())
+  approvedAt    DateTime?
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  requestedBy   User     @relation("ApprovalRequestedBy", fields: [requestedById], references: [id])
+  approvedBy    User?    @relation("ApprovalApprovedBy", fields: [approvedById], references: [id])
+  @@map("approvals")
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model RecurringInvoice {
+  id            String   @id @default(cuid())
+  saleId        String
+  schedule      String   // cron or ISO 8601 duration
+  nextRun       DateTime
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  sale          Sale     @relation(fields: [saleId], references: [id])
+  @@map("recurring_invoices")
+}
+
+model CreditNote {
+  id            String   @id @default(cuid())
+  saleId        String
+  amount        Decimal  @db.Decimal(10, 2)
+  reason        String
+  status        CreditNoteStatus @default(PENDING)
+  issuedById    String
+  issuedAt      DateTime @default(now())
+  approvedById  String?
+  approvedAt    DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  sale          Sale     @relation(fields: [saleId], references: [id])
+  issuedBy      User     @relation("CreditNoteIssuedBy", fields: [issuedById], references: [id])
+  approvedBy    User?    @relation("CreditNoteApprovedBy", fields: [approvedById], references: [id])
+  @@map("credit_notes")
+}
+
+enum CreditNoteStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model SalesTarget {
+  id            String   @id @default(cuid())
+  userId        String
+  period        String   // e.g., 2024-Q1
+  targetAmount  Decimal  @db.Decimal(15, 2)
+  achieved      Decimal  @default(0) @db.Decimal(15, 2)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  user          User     @relation(fields: [userId], references: [id])
+  commissions   Commission[]
+  @@map("sales_targets")
+}
+
+model Commission {
+  id            String   @id @default(cuid())
+  salesTargetId String
+  saleId        String
+  amount        Decimal  @db.Decimal(10, 2)
+  userId        String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  salesTarget   SalesTarget @relation(fields: [salesTargetId], references: [id])
+  sale          Sale       @relation(fields: [saleId], references: [id])
+  user          User?      @relation("UserCommissions", fields: [userId], references: [id])
+  @@map("commissions")
+
 }
