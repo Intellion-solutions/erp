@@ -11,6 +11,7 @@ const { auditLog } = require('../services/auditService');
 const { sendToTerminal, broadcastToAll, updateDashboard } = require('../services/socketService');
 const settingsService = require('../services/settingsService');
 
+
 const router = express.Router();
 const prisma = new PrismaClient();
 
@@ -24,6 +25,7 @@ router.get('/settings', authenticateToken, async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch POS settings' });
   }
 });
+
 
 // Get all active products for POS
 router.get('/products', [authenticateToken, canProcessSales], async (req, res) => {
@@ -119,6 +121,7 @@ router.post('/sale/start', [authenticateToken, canProcessSales], async (req, res
     }
 
     const saleNumber = `POS-${nextNumber.toString().padStart(6, '0')}`;
+
 
     const saleData = {
       saleNumber,

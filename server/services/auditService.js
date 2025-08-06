@@ -183,6 +183,7 @@ const createAuditLog = async ({ userId, action, entity, entityId, oldValues, new
 module.exports = {
   auditLog,
   createAuditLog,
+
   getAuditLogs,
   getAuditStats
 };

@@ -35,6 +35,7 @@ const adminRoutes = require('./routes/admin');
 // Import services
 const settingsService = require('./services/settingsService');
 
+
 const app = express();
 const server = createServer(app);
 const io = new Server(server, {
@@ -98,6 +99,7 @@ app.use('/api/hr', hrRoutes);
 app.use('/api/accounting', accountingRoutes);
 app.use('/api/admin', adminRoutes);
 
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   logger.error('Unhandled error:', err);
@@ -129,6 +131,7 @@ async function startServer() {
     // Initialize Settings Service
     await settingsService.initialize();
     logger.info('Settings service initialized');
+
 
     // Initialize Socket.IO
     // initializeSocket(io); // This line is removed as per the edit hint
